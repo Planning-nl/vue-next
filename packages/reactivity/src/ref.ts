@@ -1,6 +1,7 @@
 import {
+  createDep,
+  Dep,
   isTracking,
-  ReactiveEffect,
   trackEffects,
   triggerEffects
 } from './effect'
@@ -27,11 +28,11 @@ export interface Ref<T = any> {
   /**
    * Deps are maintained locally rather than in depsMap for performance reasons.
    */
-  dep?: Set<ReactiveEffect>
+  dep?: Dep
 }
 
 type RefBase<T> = {
-  dep?: Set<ReactiveEffect>
+  dep?: Dep
   value: T
 }
 
@@ -42,7 +43,7 @@ export function trackRefValue(ref: RefBase<any>) {
       ? { target: ref, type: TrackOpTypes.GET, key: 'value' }
       : undefined
     if (!ref.dep) {
-      ref.dep = new Set<ReactiveEffect>()
+      ref.dep = createDep()
     }
     trackEffects(ref.dep, eventInfo)
   }
@@ -95,7 +96,7 @@ export function shallowRef(value?: unknown) {
 }
 
 class RefImpl<T> {
-  public dep?: Set<ReactiveEffect> = undefined
+  public dep?: Dep = undefined
 
   private _value: T
 
@@ -164,7 +165,7 @@ export type CustomRefFactory<T> = (
 }
 
 class CustomRefImpl<T> {
-  public dep?: Set<ReactiveEffect> = undefined
+  public dep?: Dep = undefined
 
   private readonly _get: ReturnType<CustomRefFactory<T>>['get']
   private readonly _set: ReturnType<CustomRefFactory<T>>['set']

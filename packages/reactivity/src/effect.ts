@@ -5,7 +5,7 @@ import { EMPTY_OBJ, isArray, isIntegerKey, isMap } from '@vue/shared'
 // Conceptually, it's easier to think of a dependency as a Dep class
 // which maintains a Set of subscribers, but we simply store them as
 // raw Sets to reduce memory overhead.
-type Dep = Set<ReactiveEffect>
+export type Dep = Set<ReactiveEffect> & { marker: number }
 type KeyToDepMap = Map<any, Dep>
 const targetMap = new WeakMap<any, KeyToDepMap>()
 
@@ -102,13 +102,15 @@ function createReactiveEffect<T = any>(
       return fn()
     }
     if (!effectStack.includes(effect)) {
-      cleanup(effect)
+      const depsLength = effect.deps.length
       try {
         enableTracking()
         effectStack.push(effect)
         activeEffect = effect
         return fn()
       } finally {
+        syncNewDeps(effect, depsLength)
+
         effectStack.pop()
         resetTracking()
         const n = effectStack.length
@@ -124,6 +126,41 @@ function createReactiveEffect<T = any>(
   effect.deps = []
   effect.options = options
   return effect
+}
+
+enum DepMarker {
+  stale,
+  remove,
+  add,
+  keep
+}
+
+function syncNewDeps(effect: ReactiveEffect, prevDepsLength: number) {
+  const deps = effect.deps
+  const n = deps.length
+  for (let i = 0; i < prevDepsLength; i++) {
+    deps[i].marker = DepMarker.remove
+  }
+  for (let i = prevDepsLength; i < n; i++) {
+    deps[i].marker =
+      deps[i].marker === DepMarker.remove ? DepMarker.keep : DepMarker.add
+  }
+
+  let ptr = 0
+  for (let i = 0; i < n; i++) {
+    if (deps[i].marker !== DepMarker.stale) {
+      if (deps[i].marker === DepMarker.remove) {
+        deps[i].delete(effect)
+      } else if (deps[i].marker === DepMarker.add) {
+        deps[i].add(effect)
+        deps[ptr++] = deps[i]
+      } else if (deps[i].marker === DepMarker.keep) {
+        deps[ptr++] = deps[i]
+      }
+      deps[i].marker = DepMarker.stale
+    }
+  }
+  deps.length = ptr
 }
 
 function cleanup(effect: ReactiveEffect) {
@@ -164,7 +201,8 @@ export function track(target: object, type: TrackOpTypes, key: unknown) {
   }
   let dep = depsMap.get(key)
   if (!dep) {
-    depsMap.set(key, (dep = new Set()))
+    dep = createDep()
+    depsMap.set(key, dep)
   }
 
   const eventInfo = __DEV__
@@ -174,27 +212,30 @@ export function track(target: object, type: TrackOpTypes, key: unknown) {
   trackEffects(dep, eventInfo)
 }
 
+export function createDep(): Dep {
+  const dep = new Set<ReactiveEffect>() as Dep
+  dep.marker = DepMarker.stale
+  return dep
+}
+
 export function isTracking() {
   return shouldTrack && activeEffect !== undefined
 }
 
 export function trackEffects(
-  dep: Set<ReactiveEffect>,
+  dep: Dep,
   debuggerEventExtraInfo?: DebuggerEventExtraInfo
 ) {
-  if (!dep.has(activeEffect!)) {
-    dep.add(activeEffect!)
-    activeEffect!.deps.push(dep)
-    if (__DEV__ && activeEffect!.options.onTrack) {
-      activeEffect!.options.onTrack(
-        Object.assign(
-          {
-            effect: activeEffect!
-          },
-          debuggerEventExtraInfo
-        )
+  activeEffect!.deps.push(dep)
+  if (__DEV__ && activeEffect!.options.onTrack) {
+    activeEffect!.options.onTrack(
+      Object.assign(
+        {
+          effect: activeEffect!
+        },
+        debuggerEventExtraInfo
       )
-    }
+    )
   }
 }
 
@@ -286,7 +327,7 @@ function concatSets<T>(sets: Set<T>[]): Set<T> {
 }
 
 export function triggerEffects(
-  dep: Dep,
+  dep: Set<ReactiveEffect>,
   debuggerEventExtraInfo?: DebuggerEventExtraInfo
 ) {
   const run = (effect: ReactiveEffect) => {
