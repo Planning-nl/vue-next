@@ -1,6 +1,6 @@
 import { ReactiveEffect, getTrackOpBit } from './effect'
 
-export type Dep = Set<ReactiveEffect> & TrackedMarkers
+export type Dep = Set<WeakRef<ReactiveEffect>> & TrackedMarkers
 
 /**
  * wasTracked and newTracked maintain the status for several levels of effect
@@ -9,8 +9,8 @@ export type Dep = Set<ReactiveEffect> & TrackedMarkers
  */
 type TrackedMarkers = { wasTracked: number; newTracked: number }
 
-export function createDep(effects?: ReactiveEffect[]): Dep {
-  const dep = new Set<ReactiveEffect>(effects) as Dep
+export function createDep(effects?: WeakRef<ReactiveEffect>[]): Dep {
+  const dep = new Set<WeakRef<ReactiveEffect>>(effects) as Dep
   dep.wasTracked = 0
   dep.newTracked = 0
   return dep
