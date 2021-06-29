@@ -1,11 +1,19 @@
 import { TrackOpTypes, TriggerOpTypes } from './operations'
 import { extend, isArray, isIntegerKey, isMap } from '@vue/shared'
+import {
+  createDep,
+  Dep,
+  newTracked,
+  resetTracked,
+  setNewTracked,
+  setWasTracked,
+  wasTracked
+} from './Dep'
 
 // The main WeakMap that stores {target -> key -> dep} connections.
 // Conceptually, it's easier to think of a dependency as a Dep class
 // which maintains a Set of subscribers, but we simply store them as
 // raw Sets to reduce memory overhead.
-type Dep = Set<ReactiveEffect>
 type KeyToDepMap = Map<any, Dep>
 const targetMap = new WeakMap<any, KeyToDepMap>()
 
@@ -52,17 +60,54 @@ export class ReactiveEffect<T = any> {
       return this.fn()
     }
     if (!effectStack.includes(this)) {
-      this.cleanup()
       try {
-        enableTracking()
         effectStack.push((activeEffect = this))
+        enableTracking()
+
+        effectTrackDepth++
+
+        if (effectTrackDepth <= maxMarkerBits) {
+          this.initDepMarkers()
+        } else {
+          this.cleanup()
+        }
         return this.fn()
       } finally {
-        effectStack.pop()
+        if (effectTrackDepth <= maxMarkerBits) {
+          this.finalizeDepMarkers()
+        }
+        effectTrackDepth--
         resetTracking()
+        effectStack.pop()
         const n = effectStack.length
         activeEffect = n > 0 ? effectStack[n - 1] : undefined
       }
+    }
+  }
+
+  initDepMarkers() {
+    const { deps } = this
+    if (deps.length) {
+      for (let i = 0; i < deps.length; i++) {
+        setWasTracked(deps[i])
+      }
+    }
+  }
+
+  finalizeDepMarkers() {
+    const { deps } = this
+    if (deps.length) {
+      let ptr = 0
+      for (let i = 0; i < deps.length; i++) {
+        const dep = deps[i]
+        if (wasTracked(dep) && !newTracked(dep)) {
+          dep.delete(this)
+        } else {
+          deps[ptr++] = dep
+        }
+        resetTracked(dep)
+      }
+      deps.length = ptr
     }
   }
 
@@ -85,6 +130,20 @@ export class ReactiveEffect<T = any> {
       this.active = false
     }
   }
+}
+
+// The number of effects currently being tracked recursively.
+let effectTrackDepth = 0
+
+/**
+ * The bitwise track markers support at most 30 levels op recursion.
+ * This value is chosen to enable modern JS engines to use a SMI on all platforms.
+ * When recursion depth is greater, fall back to using a full cleanup.
+ */
+const maxMarkerBits = 30
+
+export function getTrackOpBit(): number {
+  return 1 << effectTrackDepth
 }
 
 export interface ReactiveEffectOptions {
@@ -153,7 +212,8 @@ export function track(target: object, type: TrackOpTypes, key: unknown) {
   }
   let dep = depsMap.get(key)
   if (!dep) {
-    depsMap.set(key, (dep = new Set()))
+    dep = createDep()
+    depsMap.set(key, dep)
   }
 
   const eventInfo = __DEV__
@@ -168,10 +228,21 @@ export function isTracking() {
 }
 
 export function trackEffects(
-  dep: Set<ReactiveEffect>,
+  dep: Dep,
   debuggerEventExtraInfo?: DebuggerEventExtraInfo
 ) {
-  if (!dep.has(activeEffect!)) {
+  let shouldTrack = false
+  if (effectTrackDepth <= maxMarkerBits) {
+    if (!newTracked(dep)) {
+      setNewTracked(dep)
+      shouldTrack = !wasTracked(dep)
+    }
+  } else {
+    // Full cleanup mode.
+    shouldTrack = !dep.has(activeEffect!)
+  }
+
+  if (shouldTrack) {
     dep.add(activeEffect!)
     activeEffect!.deps.push(dep)
     if (__DEV__ && activeEffect!.onTrack) {
@@ -262,7 +333,7 @@ export function trigger(
         effects.push(...dep)
       }
     }
-    triggerEffects(new Set(effects), eventInfo)
+    triggerEffects(createDep(effects), eventInfo)
   }
 }
 
