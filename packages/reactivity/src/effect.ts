@@ -5,7 +5,7 @@ import { extend, isArray, isIntegerKey, isMap } from '@vue/shared'
 // Conceptually, it's easier to think of a dependency as a Dep class
 // which maintains a Set of subscribers, but we simply store them as
 // raw Sets to reduce memory overhead.
-type Dep = Set<ReactiveEffect>
+type Dep = Set<WeakRef<ReactiveEffect>>
 type KeyToDepMap = Map<any, Dep>
 const targetMap = new WeakMap<any, KeyToDepMap>()
 
@@ -32,6 +32,8 @@ export const MAP_KEY_ITERATE_KEY = Symbol(__DEV__ ? 'Map key iterate' : '')
 export class ReactiveEffect<T = any> {
   active = true
   deps: Dep[] = []
+
+  weakRef = new WeakRef(this)
 
   // can be attached after creation
   onStop?: () => void
@@ -70,7 +72,7 @@ export class ReactiveEffect<T = any> {
     const { deps } = this
     if (deps.length) {
       for (let i = 0; i < deps.length; i++) {
-        deps[i].delete(this)
+        deps[i].delete(this.weakRef)
       }
       deps.length = 0
     }
@@ -168,11 +170,11 @@ export function isTracking() {
 }
 
 export function trackEffects(
-  dep: Set<ReactiveEffect>,
+  dep: Set<WeakRef<ReactiveEffect>>,
   debuggerEventExtraInfo?: DebuggerEventExtraInfo
 ) {
-  if (!dep.has(activeEffect!)) {
-    dep.add(activeEffect!)
+  if (!dep.has(activeEffect!.weakRef)) {
+    dep.add(activeEffect!.weakRef)
     activeEffect!.deps.push(dep)
     if (__DEV__ && activeEffect!.onTrack) {
       activeEffect!.onTrack(
@@ -256,7 +258,7 @@ export function trigger(
       triggerEffects(deps[0], eventInfo)
     }
   } else {
-    const effects: ReactiveEffect[] = []
+    const effects: WeakRef<ReactiveEffect>[] = []
     for (const dep of deps) {
       if (dep) {
         effects.push(...dep)
@@ -271,8 +273,11 @@ export function triggerEffects(
   debuggerEventExtraInfo?: DebuggerEventExtraInfo
 ) {
   // spread into array for stabilization
-  for (const effect of [...dep]) {
-    if (effect !== activeEffect || effect.allowRecurse) {
+  for (const effectRef of [...dep]) {
+    const effect = effectRef.deref()
+    if (!effect) {
+      dep.delete(effectRef)
+    } else if (effect !== activeEffect || effect.allowRecurse) {
       if (__DEV__ && effect.onTrigger) {
         effect.onTrigger(extend({ effect }, debuggerEventExtraInfo))
       }

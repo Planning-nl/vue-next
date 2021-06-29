@@ -20,7 +20,7 @@ export interface WritableComputedOptions<T> {
 }
 
 class ComputedRefImpl<T> {
-  public dep?: Set<ReactiveEffect> = undefined
+  public dep?: Set<WeakRef<ReactiveEffect>> = undefined
 
   private _value!: T
   private _dirty = true
